@@ -259,11 +259,11 @@ let db=null, dbState="loading", downloads=null, assets=null, usage=null, busy=fa
 const CFG=window.TL_CONFIG||{};
 const BUCKET="arquivos";
 function makeDb(client){
-  const cache={};
+  const cache={},subs={};
   return {collection(c){
     cache[c]=cache[c]||new Map();const m=cache[c];
     const emit=fns=>fns.forEach(fn=>fn({docs:[...m.entries()].map(([id,data])=>({id,exists:true,data:()=>data}))}));
-    const listeners=[];
+    const listeners=subs[c]=subs[c]||[];
     return {
       onSnapshot(next,err){listeners.push(next);
         (async()=>{try{let from=0;for(;;){const {data,error}=await client.from(c).select("id,data").range(from,from+999);if(error)throw error;data.forEach(r=>m.set(r.id,r.data||{}));if(data.length<1000)break;from+=1000}
@@ -336,7 +336,15 @@ function isPend(f,a){return f.status==="a_fazer"||(f.status==="redigido"&&a.esco
 function encerrado(a){const fs=a.fases||[];if(!fs.length)return false;const l=fs[fs.length-1];return l.status==="deferido"||l.status==="nao_recorrer"||(l.status==="indeferido"&&l.tipo==="Recurso CETRAN")||(l.status==="redigido"&&a.escopo==="redacao")}
 function faseAtual(a){const fs=a.fases||[];const i=fs.findIndex(f=>isPend(f,a)||f.status==="conferir");return i>=0?{f:fs[i],i}:(fs.length?{f:fs[fs.length-1],i:fs.length-1}:{f:null,i:-1})}
 function resultado(a){const fs=a.fases||[];if(fs.some(f=>f.status==="deferido"))return "deferido";const l=fs[fs.length-1];if(l&&l.status==="indeferido")return "indeferido";return "andamento"}
-function pendItems(){const out=[];for(const a of S.autos.values()){(a.fases||[]).forEach((f,i)=>{if(isPend(f,a))out.push({a,f,i,d:daysUntil(f.prazo)})})}return out}
+const FASES_CRIM=["Inquérito / TCO","Proposta de ANPP","ANPP em cumprimento","Denúncia recebida","Resposta à acusação","Instrução / audiência","Alegações finais","Sentença","Recurso","Encerrado"];
+function crimInfo(a){const cr=a.criminal||{};const txt=((a.codigo||"")+" "+(a.descricao||"")+" "+(a.obs||"")).toLowerCase();
+  const recusa=/7579|165-a|165a|recusa/.test(txt);const alcool=!recusa&&(/^5169|\b5169/.test(String(a.codigo||""))||/art\.? ?165\b|alcool|álcool|embriag|alcoolemia/.test(txt));
+  const med=nnum(cr.medicao);let flag="";
+  if(cr.ativo)flag="ativo";else if(alcool&&med>=0.3)flag="possivel";else if(alcool&&!med)flag="verificar";
+  return{cr,alcool,recusa,med,flag}}
+function pendItems(){const out=[];for(const a of S.autos.values()){(a.fases||[]).forEach((f,i)=>{if(isPend(f,a))out.push({a,f,i,d:daysUntil(f.prazo)})});
+  const cr=a.criminal;if(cr&&cr.ativo&&cr.fase!=="Encerrado"&&cr.prazo)out.push({a,f:{tipo:"Criminal · "+(cr.fase||"processo"),prazo:cr.prazo,status:"a_fazer"},i:-1,d:daysUntil(cr.prazo),crim:true})}return out}
+function crimTag(a){const c=crimInfo(a);return c.flag==="ativo"?'<span class="tag" style="color:var(--bad);border-color:var(--bad)">Criminal</span>':c.flag==="possivel"?'<span class="tag" style="color:var(--bad);border-color:var(--bad)">Possível crime</span>':c.flag==="verificar"?'<span class="tag" style="color:var(--warn);border-color:var(--warn)">Verificar crime</span>':""}
 function counts(){
   const p=pendItems();const c={venc:0,hoje:0,d3:0,d7:0,conf:0,aguard:0,sem:0};
   p.forEach(x=>{if(x.d==null)c.sem++;else if(x.d<0)c.venc++;else if(x.d===0)c.hoje++;else if(x.d<=3)c.d3++;else if(x.d<=7)c.d7++});
@@ -440,9 +448,9 @@ function deadlineRow(x){
   const a=x.a,f=x.f,col=dColor(x.d);
   return '<button class="row" style="--rc:'+col+'" data-act="open-auto" data-id="'+esc(a.id)+'">'+
     '<span class="date"><b>'+(f.prazo?fmtDM(f.prazo):"—")+"</b><small>"+(f.prazo?wd(f.prazo):"s/ data")+"</small></span>"+
-    '<span class="rbody"><span class="l1">'+plate(a.placa)+'<span class="ait">'+esc(a.ait||"sem nº")+'</span><span class="tag">'+esc(a.orgao||"órgão?")+"</span></span>"+
+    '<span class="rbody"><span class="l1">'+plate(a.placa)+'<span class="ait">'+esc(a.ait||"sem nº")+'</span><span class="tag">'+esc(a.orgao||"órgão?")+"</span>"+crimTag(a)+"</span>"+
     '<span class="l2">'+esc(cname(a.clienteId))+" · "+esc(f.tipo)+(a.descricao?" · "+esc(a.descricao):"")+"</span></span>"+
-    '<span class="rside"><span class="dleft">'+dLabel(x.d)+"</span>"+pill(f.status)+(a.escopo!=="completo"?'<span class="tag">'+esc(ESC_TAG[a.escopo]||"")+"</span>":"")+"</span></button>";
+    '<span class="rside"><span class="dleft">'+dLabel(x.d)+"</span>"+pill(f.status)+(a.escopo!=="completo"?'<span class="tag">'+esc(ESC_TAG[a.escopo]||"")+"</span>":"")+(x.crim&&a.criminal.advogado?'<span class="tag">'+esc(a.criminal.advogado)+"</span>":"")+"</span></button>";
 }
 
 function vPainel(){
@@ -473,7 +481,7 @@ function autoTable(list,showCliente){
   list.sort((x,y)=>{const fx=faseAtual(x).f,fy=faseAtual(y).f;return ((fx&&fx.prazo)||"9999").localeCompare((fy&&fy.prazo)||"9999")});
   return '<div class="tbl-wrap"><table><thead><tr><th>Placa</th><th>AIT</th>'+(showCliente?"<th>Cliente</th>":"")+'<th>Órgão</th><th>Infração</th><th class="r">Valor</th><th>Fase atual</th><th>Prazo</th><th>Status</th></tr></thead><tbody>'+
   list.map(a=>{const {f}=faseAtual(a);const d=f?daysUntil(f.prazo):null;const pend=f&&isPend(f,a);
-    return '<tr data-act="open-auto" data-id="'+esc(a.id)+'"><td>'+plate(a.placa)+'</td><td class="ait">'+esc(a.ait)+(a.condutor?'<div class="muted">Condutor: '+esc(a.condutor)+"</div>":"")+"</td>"+(showCliente?'<td class="clip">'+esc(cname(a.clienteId))+"</td>":"")+"<td>"+esc(a.orgao)+'</td><td class="clip" title="'+esc(a.descricao)+'">'+(a.codigo?'<span class="mono">'+esc(a.codigo)+"</span> ":"")+esc(a.descricao)+'</td><td class="r num">'+(a.valor?money(a.valor):"—")+"</td><td>"+(f?esc(f.tipo):"—")+'</td><td class="num" style="white-space:nowrap">'+(f&&f.prazo?fmtD(f.prazo)+(pend?'<div class="muted" style="color:'+dColor(d)+'">'+dLabel(d)+"</div>":""):"—")+"</td><td>"+(f?pill(f.status):"")+"</td></tr>"}).join("")+"</tbody></table></div>";
+    return '<tr data-act="open-auto" data-id="'+esc(a.id)+'"><td>'+plate(a.placa)+'</td><td class="ait">'+esc(a.ait)+(crimTag(a)?" "+crimTag(a):"")+(a.condutor?'<div class="muted">Condutor: '+esc(a.condutor)+"</div>":"")+"</td>"+(showCliente?'<td class="clip">'+esc(cname(a.clienteId))+"</td>":"")+"<td>"+esc(a.orgao)+'</td><td class="clip" title="'+esc(a.descricao)+'">'+(a.codigo?'<span class="mono">'+esc(a.codigo)+"</span> ":"")+esc(a.descricao)+'</td><td class="r num">'+(a.valor?money(a.valor):"—")+"</td><td>"+(f?esc(f.tipo):"—")+'</td><td class="num" style="white-space:nowrap">'+(f&&f.prazo?fmtD(f.prazo)+(pend?'<div class="muted" style="color:'+dColor(d)+'">'+dLabel(d)+"</div>":""):"—")+"</td><td>"+(f?pill(f.status):"")+"</td></tr>"}).join("")+"</tbody></table></div>";
 }
 
 function vAutos(){
@@ -525,7 +533,7 @@ function vClientes(){
 function resumoCliente(c){
   const au=arr(S.autos).filter(a=>a.clienteId===c.id);const by={};au.forEach(a=>{(by[a.placa||"Sem placa"]=by[a.placa||"Sem placa"]||[]).push(a)});
   let t="Resumo dos autos de trânsito – "+c.nome+"\nAtualizado em "+fmtD(todayISO())+"\n";
-  Object.keys(by).sort().forEach(p=>{t+="\nPlaca "+p+(by[p][0].modelo?" ("+by[p][0].modelo+")":"")+"\n";by[p].forEach(a=>{const {f}=faseAtual(a);t+="• AIT "+(a.ait||"s/n")+" – "+(a.orgao||"")+(a.descricao?" – "+a.descricao:"")+(a.valor?" – "+money(a.valor):"")+"\n   "+(f?f.tipo+": "+(STATUS[f.status]||f.status)+(f.prazo?" (prazo "+fmtD(f.prazo)+")":""):"sem fase")+(a.condutor?"\n   Condutor identificado: "+a.condutor:"")+"\n"})});
+  Object.keys(by).sort().forEach(p=>{t+="\nPlaca "+p+(by[p][0].modelo?" ("+by[p][0].modelo+")":"")+"\n";by[p].forEach(a=>{const {f}=faseAtual(a);t+="• AIT "+(a.ait||"s/n")+" – "+(a.orgao||"")+(a.descricao?" – "+a.descricao:"")+(a.valor?" – "+money(a.valor):"")+"\n   "+(f?f.tipo+": "+(STATUS[f.status]||f.status)+(f.prazo?" (prazo "+fmtD(f.prazo)+")":""):"sem fase")+(a.condutor?"\n   Condutor identificado: "+a.condutor:"")+(a.criminal&&a.criminal.ativo?"\n   Processo criminal: "+(a.criminal.fase||"em análise")+(a.criminal.numero?" (nº "+a.criminal.numero+")":""):"")+"\n"})});
   const ci=au.filter(a=>a.condutor);
   if(ci.length){t+="\nMultas com condutor identificado (responsabilidade do motorista):\n";ci.forEach(a=>{t+="• "+a.condutor+" – AIT "+a.ait+" – placa "+a.placa+" – "+(a.descricao||"")+(a.valor?" – "+money(a.valor):"")+"\n"})}
   return t;
@@ -645,6 +653,14 @@ function renderDrawer(){
         return '<div class="fase" style="--fc:'+col+'"><div class="fase-h"><span class="n">'+(i+1)+".</span>"+pill(f.status)+(f.prazo&&isPend(f,d)?'<span class="hint" style="color:'+col+';font-weight:700">'+dLabel(dd)+"</span>":"")+'<span style="flex:1"></span>'+(f.status==="indeferido"&&NEXT[f.tipo]&&!d.fases.some((g,j)=>j>i&&g.tipo===NEXT[f.tipo])?'<button class="btn sm primary" data-act="next-fase" data-i="'+i+'">Abrir '+esc(NEXT[f.tipo])+"</button>":"")+'<button class="btn sm ghost" data-act="del-fase" data-i="'+i+'" aria-label="Remover fase">Remover</button></div>'+
         '<div class="grid3">'+sel("f"+i+"t","fases."+i+".tipo","Fase",f.tipo,FASES.map(x=>[x,x]))+inp("f"+i+"p","fases."+i+".prazo","Data-limite",f.prazo,"date")+sel("f"+i+"s","fases."+i+".status","Status",f.status,Object.entries(STATUS))+inp("f"+i+"pr","fases."+i+".protocolo","Protocolo / processo",f.protocolo,"text")+inp("f"+i+"o","fases."+i+".obs","Observação",f.obs,"text","span2")+"</div>"+
         '<div class="fname"><code>'+esc(fileName(d,f))+'</code><button class="btn sm" data-act="copy-name" data-i="'+i+'">Copiar nome</button></div></div>'}).join(""):'<p class="hint">Nenhuma fase. Adicione a defesa prévia, o recurso ou a indicação de condutor com a data-limite.</p>')+"</div>";
+    {const ci=crimInfo(d);const cr=d.criminal||{};
+      let aviso="";if(ci.recusa)aviso='<p class="hint">Recusa ao etilômetro (art. 165-A), por si só, não configura o crime do art. 306.</p>';
+      else if(ci.alcool&&ci.med>=0.3)aviso='<p class="hint" style="color:var(--bad);font-weight:700">Concentração considerada de '+String(ci.med).replace(".",",")+' mg/L: atinge o patamar do art. 306 do CTB (0,3 mg/L de ar alveolar). Avaliar processo criminal.</p>';
+      else if(ci.alcool&&!ci.med)aviso='<p class="hint" style="color:var(--warn);font-weight:700">Infração de alcoolemia: informe a concentração considerada para checar o art. 306 (crime a partir de 0,3 mg/L) e verifique se há termo de constatação de alteração da capacidade psicomotora.</p>';
+      else if(ci.alcool)aviso='<p class="hint">Concentração abaixo de 0,3 mg/L: só infração administrativa, salvo se houver sinais de alteração da capacidade psicomotora.</p>';
+      body+='<div class="sec"><h3>Frente criminal</h3>'+aviso+'<label class="chk"><input type="checkbox" id="cr-ativo" data-crim="ativo"'+(cr.ativo?" checked":"")+'> Há (ou pode haver) processo criminal</label>'+
+        '<div class="grid2">'+inp("cr-med","criminal.medicao","Concentração considerada (mg/L)",cr.medicao,"number")+'<div class="field"><label for="cr-adv">Advogado responsável</label><input type="text" id="cr-adv" data-f="criminal.advogado" list="pessoas-crim" value="'+esc(cr.advogado)+'"><datalist id="pessoas-crim">'+pessoasConhecidas().map(n=>'<option value="'+esc(n)+'">').join("")+'</datalist></div>'+
+        (cr.ativo?inp("cr-num","criminal.numero","Nº do processo / inquérito",cr.numero)+inp("cr-vara","criminal.vara","Vara / delegacia",cr.vara)+sel("cr-fase","criminal.fase","Fase",cr.fase||FASES_CRIM[0],FASES_CRIM.map(x=>[x,x]))+inp("cr-prazo","criminal.prazo","Próximo prazo / audiência",cr.prazo,"date")+ta("cr-obs","criminal.obs","Observações do criminal",cr.obs,"span2"):"")+"</div></div>"}
     const ts=arr(S.teses);
     body+='<div class="sec"><h3>Teses usadas</h3>'+(ts.length?'<div class="checks">'+ts.map(t=>'<label class="chk"><input type="checkbox" id="t-'+esc(t.id)+'" data-tese="'+esc(t.id)+'"'+((d.teseIds||[]).includes(t.id)?" checked":"")+"> "+esc(t.titulo)+"</label>").join("")+"</div>":'<p class="hint">Cadastre teses na aba "Teses e equipamentos".</p>')+"</div>";
     const org=(d.orgao||"").toUpperCase();
@@ -688,10 +704,10 @@ function renderDrawer(){
   $("#drawer-root").innerHTML='<div class="scrim" data-act="close"></div><aside class="drawer" role="dialog" aria-modal="true" aria-label="Editar registro"><div class="dr-h"><h2>'+title+'</h2><button class="btn ghost" data-act="close" aria-label="Fechar">Fechar</button></div><div class="dr-b">'+body+'</div><div class="dr-f">'+delBtn+'<span class="sp"></span><button class="btn" data-act="close">Cancelar</button><button class="btn primary" data-act="save">Salvar</button></div></aside>';
   $(".dr-b").scrollTop=scroll;
 }
-function setPath(obj,path,val){const ps=path.split(".");let o=obj;for(let i=0;i<ps.length-1;i++)o=o[ps[i]];o[ps[ps.length-1]]=val}
+function setPath(obj,path,val){const ps=path.split(".");let o=obj;for(let i=0;i<ps.length-1;i++){if(o[ps[i]]==null)o[ps[i]]={};o=o[ps[i]]}o[ps[ps.length-1]]=val}
 
 const BLANK={
-  auto:()=>({ait:"",clienteId:"",placa:"",modelo:"",proprietario:"",orgao:"",codigo:"",descricao:"",dataInfracao:"",local:"",valor:"",condutor:"",escopo:"completo",equipamentoId:"",teseIds:[],fases:[{tipo:"Defesa prévia",prazo:"",status:"a_fazer",obs:"",protocolo:""}],docs:{},obs:""}),
+  auto:()=>({criminal:{},ait:"",clienteId:"",placa:"",modelo:"",proprietario:"",orgao:"",codigo:"",descricao:"",dataInfracao:"",local:"",valor:"",condutor:"",escopo:"completo",equipamentoId:"",teseIds:[],fases:[{tipo:"Defesa prévia",prazo:"",status:"a_fazer",obs:"",protocolo:""}],docs:{},obs:""}),
   cliente:()=>({nome:"",tipo:"PF",documento:"",telefone:"",email:"",cidade:"Araguaína/TO",obs:""}),
   tese:()=>({titulo:"",categoria:"",forca:"media",fundamento:"",quandoUsar:"",modelo:""}),
   equip:()=>({serie:"",inmetro:"",modelo:"",local:"",orgao:"",certValidade:"",obs:""}),
@@ -706,6 +722,7 @@ async function save(){
     if(!d.clienteId){toast("Escolha o cliente");return}
     if(!d.ait&&!d.placa){toast("Informe o nº do AIT ou a placa");return}
     d.valor=Number(String(d.valor).replace(",","."))||0;
+    if(d.criminal){d.criminal=Object.assign({},d.criminal);if(d.criminal.medicao!==""&&d.criminal.medicao!=null)d.criminal.medicao=nnum(d.criminal.medicao)}
   }
   if(k==="cliente"&&!d.nome.trim()){toast("Informe o nome do cliente");return}
   if(k==="tese"&&!d.titulo.trim()){toast("Informe o título da tese");return}
@@ -788,6 +805,7 @@ document.addEventListener("input",e=>{
     if(drawer.kind==="contrato"){const el=document.getElementById("div-sum");if(el)el.innerHTML=divSumHTML(drawer.draft)}
     if(t.tagName==="SELECT"||/^(placa|ait|modelo|orgao|escopo)$/.test(t.dataset.f)||/\.(status|prazo|tipo)$/.test(t.dataset.f)){refreshDrawerBits()}
     return}
+  if(t.dataset.crim){drawer.draft.criminal=Object.assign({},drawer.draft.criminal,{ativo:t.checked});if(t.checked&&!drawer.draft.criminal.fase)drawer.draft.criminal.fase=FASES_CRIM[0];renderDrawer();return}
   if(t.dataset.tese){const s=new Set(drawer.draft.teseIds||[]);t.checked?s.add(t.dataset.tese):s.delete(t.dataset.tese);drawer.draft.teseIds=[...s];return}
   if(t.dataset.doc){drawer.draft.docs=Object.assign({},drawer.draft.docs,{[t.dataset.doc]:t.checked});return}
 });
@@ -798,7 +816,7 @@ const hasFiles=e=>e.dataTransfer&&Array.from(e.dataTransfer.types||[]).includes(
 document.addEventListener("dragover",e=>{const z=e.target.closest&&e.target.closest("[data-drop]");if(!z){if(hasFiles(e))e.preventDefault();return}e.preventDefault();if(dragEl!==z){if(dragEl)dragEl.classList.remove("over");dragEl=z;z.classList.add("over")}});
 document.addEventListener("dragleave",e=>{const z=e.target.closest&&e.target.closest("[data-drop]");if(z&&!z.contains(e.relatedTarget)){z.classList.remove("over");if(dragEl===z)dragEl=null}});
 document.addEventListener("drop",e=>{const z=e.target.closest&&e.target.closest("[data-drop]");if(!z){if(hasFiles(e)){e.preventDefault();toast("Solte os arquivos dentro da área de envio")}return}e.preventDefault();z.classList.remove("over");dragEl=null;const[k,id]=z.dataset.drop.split("|");addFiles(k,id,e.dataTransfer&&e.dataTransfer.files,catOf(z))});
-document.addEventListener("change",e=>{const t=e.target;if(drawer&&(t.tagName==="SELECT"||t.type==="date")&&t.dataset.f){const ae=t.id;renderDrawer();const el=document.getElementById(ae);if(el)el.focus()}});
+document.addEventListener("change",e=>{const t=e.target;if(drawer&&(t.tagName==="SELECT"||t.type==="date"||t.id==="cr-med")&&t.dataset.f){const ae=t.id;renderDrawer();const el=document.getElementById(ae);if(el)el.focus()}});
 function refreshDrawerBits(){
   // update file names live without re-rendering inputs
   if(!drawer||drawer.kind!=="auto")return;
