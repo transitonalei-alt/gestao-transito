@@ -347,6 +347,11 @@ function fileName(a,f){
   const dt=f&&f.prazo?fmtD(f.prazo).replace(/\//g,"."):"SEM PRAZO";
   return [a.modelo||"VEÍCULO",a.ait||"SEM AIT",dt,a.orgao||"ÓRGÃO"].map(s=>String(s).toUpperCase().replace(/[\\/:*?"<>|]/g,"-")).join(" - ");
 }
+const PESSOAS_BASE=["Ithallo","Dr. João Victor"];
+const nnum=v=>Number(String(v==null?"":v).replace(",","."))||0;
+function pessoasConhecidas(){const set=new Set(PESSOAS_BASE);arr(S.contratos).forEach(k=>(k.divisao||[]).forEach(x=>{if(x.pessoa)set.add(x.pessoa)}));return[...set]}
+function divInfo(k){const div=(k.divisao||[]).filter(x=>x.pessoa||nnum(x.valor));const total=div.reduce((s,x)=>s+nnum(x.valor),0);return{div,total,dif:nnum(k.valor)-total}}
+function divResumo(k){const {div}=divInfo(k);return div.length?div.map(x=>esc(x.pessoa||"?")+" "+money(nnum(x.valor))).join(" · "):'<span class="muted">Não definida</span>'}
 function contratoCalc(c){const nn=v=>Number(String(v==null?"":v).replace(",","."))||0;const pago=(c.pagamentos||[]).reduce((s,p)=>s+nn(p.valor),0);const saldo=nn(c.valor)-pago;const d=daysUntil(c.vencimento);let st="emdia";if(saldo<=0.004)st="quitado";else if(d!=null&&d<0)st="atrasado";return{pago,saldo,st,d}}
 
 /* ---------- files ---------- */
@@ -525,6 +530,7 @@ function resumoCliente(c){
   if(ci.length){t+="\nMultas com condutor identificado (responsabilidade do motorista):\n";ci.forEach(a=>{t+="• "+a.condutor+" – AIT "+a.ait+" – placa "+a.placa+" – "+(a.descricao||"")+(a.valor?" – "+money(a.valor):"")+"\n"})}
   return t;
 }
+function divSumHTML(d){const {total,dif}=divInfo(d);const v=nnum(d.valor);let msg="";if(!(d.divisao||[]).length)msg="";else if(Math.abs(dif)<0.005)msg='<span style="color:var(--ok);font-weight:700">Confere com o valor contratado</span>';else if(dif>0)msg='<span style="color:var(--warn);font-weight:700">Faltam '+money(dif)+" para fechar "+money(v)+"</span>";else msg='<span style="color:var(--bad);font-weight:700">Passou '+money(-dif)+" do valor contratado</span>";return "<span>Total dividido: <b>"+money(total)+"</b></span>"+msg}
 function crumbs(c,v){return '<nav class="crumbs" aria-label="Caminho"><button class="btn ghost sm" data-act="back-clientes">Clientes</button><span>›</span>'+(v!=null?'<button class="btn ghost sm" data-act="back-cliente">'+esc(c.nome)+"</button><span>›</span><b>"+esc(v||"Sem placa")+"</b>":"<b>"+esc(c.nome)+"</b>")+"</nav>"}
 
 function vCliente(c){
@@ -593,15 +599,23 @@ function vTeses(){
 }
 
 function contratoTable(ks,showCli){
-  return '<div class="tbl-wrap"><table><thead><tr>'+(showCli?"<th>Cliente</th>":"")+'<th>Descrição</th><th class="r">Contratado</th><th class="r">Recebido</th><th class="r">Saldo</th><th>Próximo vencimento</th><th>Situação</th></tr></thead><tbody>'+
+  return '<div class="tbl-wrap"><table><thead><tr>'+(showCli?"<th>Cliente</th>":"")+'<th>Descrição</th><th class="r">Contratado</th><th>Divisão</th><th class="r">Recebido</th><th class="r">Saldo</th><th>Próximo vencimento</th><th>Situação</th></tr></thead><tbody>'+
   ks.map(k=>{const c=contratoCalc(k);const st={quitado:'<span class="pill p-deferido">Quitado</span>',atrasado:'<span class="pill p-indeferido">Atrasado</span>',emdia:'<span class="pill p-redigido">Em dia</span>'}[c.st];
-    return '<tr data-act="edit-contrato" data-id="'+esc(k.id)+'">'+(showCli?'<td class="clip">'+esc(cname(k.clienteId))+"</td>":"")+'<td class="clip">'+esc(k.descricao)+'</td><td class="r num">'+money(k.valor)+'</td><td class="r num">'+money(c.pago)+'</td><td class="r num"><b>'+money(Math.max(0,c.saldo))+'</b></td><td class="num">'+(c.st==="quitado"?"—":fmtD(k.vencimento))+"</td><td>"+st+"</td></tr>"}).join("")+"</tbody></table></div>";
+    return '<tr data-act="edit-contrato" data-id="'+esc(k.id)+'">'+(showCli?'<td class="clip">'+esc(cname(k.clienteId))+"</td>":"")+'<td class="clip">'+esc(k.descricao)+'</td><td class="r num">'+money(k.valor)+'</td><td class="num" style="font-size:12.5px">'+divResumo(k)+'</td><td class="r num">'+money(c.pago)+'</td><td class="r num"><b>'+money(Math.max(0,c.saldo))+'</b></td><td class="num">'+(c.st==="quitado"?"—":fmtD(k.vencimento))+"</td><td>"+st+"</td></tr>"}).join("")+"</tbody></table></div>";
 }
 function vFin(){
   const ks=arr(S.contratos).sort((a,b)=>(a.vencimento||"9").localeCompare(b.vencimento||"9"));
   const tot=ks.reduce((s,k)=>s+(Number(k.valor)||0),0),calc=ks.map(contratoCalc);const pago=calc.reduce((s,c)=>s+c.pago,0);const saldo=calc.reduce((s,c)=>s+Math.max(0,c.saldo),0);const atr=calc.filter(c=>c.st==="atrasado").length;
   let h='<div class="head"><div><h2>Honorários</h2><p class="sub">Contratos de trânsito, pagamentos recebidos e o que falta receber.</p></div><div class="sp"></div><button class="btn primary" data-act="new-contrato">+ Novo contrato</button></div>';
   h+='<div class="tiles" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))"><div class="tile" style="--tc:var(--info);cursor:default"><b style="font-size:24px">'+money(tot)+'</b><span>Contratado</span></div><div class="tile" style="--tc:var(--ok);cursor:default"><b style="font-size:24px">'+money(pago)+'</b><span>Recebido</span></div><div class="tile" style="--tc:var(--accent);cursor:default"><b style="font-size:24px">'+money(saldo)+'</b><span>A receber</span></div><div class="tile" style="--tc:var(--bad);cursor:default"><b style="font-size:24px">'+atr+"</b><span>Contratos atrasados</span></div></div>";
+  if(ks.length){
+    const pp=new Map();let semDiv=0;
+    ks.forEach(k=>{const c=contratoCalc(k);const {div}=divInfo(k);const v=nnum(k.valor);const frac=v>0?Math.min(1,c.pago/v):0;if(!div.length)semDiv++;
+      div.forEach(x=>{const nome=(x.pessoa||"Sem nome").trim();const o=pp.get(nome)||{parte:0,rec:0,n:0};const val=nnum(x.valor);o.parte+=val;o.rec+=val*frac;o.n++;pp.set(nome,o)})});
+    h+='<div class="panel"><div><h3>Divisão por pessoa</h3><p class="sub">Soma das partes combinadas em cada contrato. "Já recebido" é proporcional ao que o cliente pagou.</p></div>'+
+      (pp.size?'<div class="tbl-wrap"><table><thead><tr><th>Pessoa</th><th class="r">Contratos</th><th class="r">Parte combinada</th><th class="r">Já recebido</th><th class="r">A receber</th></tr></thead><tbody>'+[...pp.entries()].sort((a,b)=>b[1].parte-a[1].parte).map(([n,o])=>'<tr style="cursor:default"><td><b>'+esc(n)+'</b></td><td class="r num">'+o.n+'</td><td class="r num">'+money(o.parte)+'</td><td class="r num">'+money(o.rec)+'</td><td class="r num">'+money(Math.max(0,o.parte-o.rec))+"</td></tr>").join("")+"</tbody></table></div>":'<p class="hint">Nenhum contrato com divisão definida ainda.</p>')+
+      (semDiv?'<p class="hint">'+semDiv+(semDiv===1?" contrato ainda sem divisão definida.":" contratos ainda sem divisão definida.")+"</p>":"")+"</div>";
+  }
   h+=ks.length?contratoTable(ks,true):'<div class="empty"><b>Nenhum contrato cadastrado</b>Registre o valor combinado com cada cliente e lance os pagamentos conforme forem entrando. O saldo e os atrasos aparecem aqui e no painel.<button class="btn primary" data-act="new-contrato">+ Cadastrar o primeiro contrato</button></div>';
   return h;
 }
@@ -660,6 +674,10 @@ function renderDrawer(){
     const c=contratoCalc(d);
     body='<div class="sec"><div class="grid2">'+sel("k-cli","clienteId","Cliente",d.clienteId,cls,"span2")+inp("k-desc","descricao","Objeto (ex.: defesa de 2 AITs PRF)",d.descricao,"text","span2")+inp("k-val","valor","Valor contratado (R$)",d.valor,"number")+inp("k-forma","forma","Forma de pagamento",d.forma)+inp("k-venc","vencimento","Próximo vencimento",d.vencimento,"date")+ta("k-obs","obs","Observações",d.obs,"span2")+"</div></div>";
     body+='<div class="sec"><div class="head"><h3>Pagamentos recebidos</h3><div class="sp"></div><button class="btn sm" data-act="add-pag">+ Pagamento</button></div>'+(d.pagamentos.length?d.pagamentos.map((p,i)=>'<div class="grid3" style="align-items:end">'+inp("p"+i+"d","pagamentos."+i+".data","Data",p.data,"date")+inp("p"+i+"v","pagamentos."+i+".valor","Valor (R$)",p.valor,"number")+'<div class="field"><button class="btn sm ghost" data-act="del-pag" data-i="'+i+'">Remover</button></div></div>').join(""):'<p class="hint">Nenhum pagamento lançado.</p>')+'<div class="money-line"><span>Recebido</span><b>'+money(c.pago)+'</b></div><div class="money-line"><span>Saldo</span><b>'+money(Math.max(0,c.saldo))+"</b></div></div>";
+    const dv=d.divisao||[];
+    body+='<div class="sec"><div class="head"><div><h3>Divisão dos honorários</h3><p class="sub">Quanto fica com cada um, combinado caso a caso.</p></div><div class="sp"></div><button class="btn sm" data-act="add-div">+ Pessoa</button></div><datalist id="pessoas">'+pessoasConhecidas().map(n=>'<option value="'+esc(n)+'">').join("")+"</datalist>"+
+      (dv.length?dv.map((x,i)=>'<div class="grid3" style="align-items:end"><div class="field"><label for="dv'+i+'p">Pessoa</label><input type="text" id="dv'+i+'p" data-f="divisao.'+i+'.pessoa" list="pessoas" value="'+esc(x.pessoa)+'"></div>'+inp("dv"+i+"v","divisao."+i+".valor","Valor (R$)",x.valor,"number")+'<div class="field"><button class="btn sm ghost" data-act="del-div" data-i="'+i+'">Remover</button></div></div>').join(""):'<p class="hint">Sem divisão definida.</p>')+
+      '<div class="money-line" id="div-sum">'+divSumHTML(d)+"</div></div>";
   }
   const canDel=!drawer.isNew;
   let delBtn="";
@@ -677,7 +695,7 @@ const BLANK={
   cliente:()=>({nome:"",tipo:"PF",documento:"",telefone:"",email:"",cidade:"Araguaína/TO",obs:""}),
   tese:()=>({titulo:"",categoria:"",forca:"media",fundamento:"",quandoUsar:"",modelo:""}),
   equip:()=>({serie:"",inmetro:"",modelo:"",local:"",orgao:"",certValidade:"",obs:""}),
-  contrato:()=>({clienteId:"",descricao:"",valor:"",forma:"",vencimento:"",pagamentos:[],obs:""})
+  contrato:()=>({clienteId:"",descricao:"",valor:"",forma:"",vencimento:"",pagamentos:[],divisao:[{pessoa:"Ithallo",valor:""},{pessoa:"Dr. João Victor",valor:""}],obs:""})
 };
 const COLL={auto:"autos",cliente:"clientes",tese:"teses",equip:"equipamentos",contrato:"contratos"};
 
@@ -692,7 +710,7 @@ async function save(){
   if(k==="cliente"&&!d.nome.trim()){toast("Informe o nome do cliente");return}
   if(k==="tese"&&!d.titulo.trim()){toast("Informe o título da tese");return}
   if(k==="equip"&&!d.serie.trim()){toast("Informe o nº de série");return}
-  if(k==="contrato"){if(!d.clienteId){toast("Escolha o cliente");return}d.valor=Number(String(d.valor).replace(",","."))||0;d.pagamentos=d.pagamentos.map(p=>({data:p.data,valor:Number(String(p.valor).replace(",","."))||0}))}
+  if(k==="contrato"){if(!d.clienteId){toast("Escolha o cliente");return}d.valor=Number(String(d.valor).replace(",","."))||0;d.pagamentos=d.pagamentos.map(p=>({data:p.data,valor:Number(String(p.valor).replace(",","."))||0}));d.divisao=(d.divisao||[]).filter(x=>String(x.pessoa||"").trim()||nnum(x.valor)).map(x=>({pessoa:String(x.pessoa||"").trim(),valor:nnum(x.valor)}))}
   const id=d.id||newId(col);const body=Object.assign({},d);delete body.id;
   const now=new Date().toISOString();body.atualizadoEm=now;if(!body.criadoEm)body.criadoEm=now;
   const btn=$('[data-act="save"]');if(btn){btn.disabled=true;btn.textContent="Salvando…"}
@@ -735,7 +753,7 @@ document.addEventListener("click",e=>{
     case "new-equip":openDrawer("equip",BLANK.equip(),true);break;
     case "edit-equip":openDrawer("equip",Object.assign(BLANK.equip(),S.equipamentos.get(id),{id}),false);break;
     case "new-contrato":{const b=BLANK.contrato();if(el.dataset.cli)b.clienteId=el.dataset.cli;openDrawer("contrato",b,true);break}
-    case "edit-contrato":openDrawer("contrato",Object.assign(BLANK.contrato(),S.contratos.get(id),{id}),false);break;
+    case "edit-contrato":{const k=S.contratos.get(id);openDrawer("contrato",Object.assign(BLANK.contrato(),k,{id,divisao:(k&&k.divisao)||[]}),false);break}
     case "copy-resumo":{const c=S.clientes.get(id);if(c)copy(resumoCliente(c));break}
     case "export":exportCSV();break;
     case "close":closeDrawer();break;
@@ -755,6 +773,8 @@ document.addEventListener("click",e=>{
     case "file-del-cancel":ui.delFile="";render();renderDrawer();break;
     case "file-del":removeFile(el.dataset.kind,el.dataset.own,el.dataset.fid);break;
     case "files-of":Object.assign(ui,{fcli:id,fcat:"",fq:"",arqCli:id,arqAuto:""});view="arquivos";try{history.replaceState(null,"","#arquivos")}catch(_){}closeDrawer();render();window.scrollTo(0,0);break;
+    case "add-div":drawer.draft.divisao=(drawer.draft.divisao||[]).concat([{pessoa:"",valor:""}]);renderDrawer();break;
+    case "del-div":drawer.draft.divisao.splice(+el.dataset.i,1);renderDrawer();break;
     case "add-pag":drawer.draft.pagamentos.push({data:todayISO(),valor:""});renderDrawer();break;
     case "del-pag":drawer.draft.pagamentos.splice(+el.dataset.i,1);renderDrawer();break;
   }
@@ -765,6 +785,7 @@ document.addEventListener("input",e=>{
   if(t.dataset.ui){ui[t.dataset.ui]=t.type==="checkbox"?t.checked:t.value;if(t.dataset.ui==="arqCli")ui.arqAuto="";render();return}
   if(!drawer)return;
   if(t.dataset.f){setPath(drawer.draft,t.dataset.f,t.value);
+    if(drawer.kind==="contrato"){const el=document.getElementById("div-sum");if(el)el.innerHTML=divSumHTML(drawer.draft)}
     if(t.tagName==="SELECT"||/^(placa|ait|modelo|orgao|escopo)$/.test(t.dataset.f)||/\.(status|prazo|tipo)$/.test(t.dataset.f)){refreshDrawerBits()}
     return}
   if(t.dataset.tese){const s=new Set(drawer.draft.teseIds||[]);t.checked?s.add(t.dataset.tese):s.delete(t.dataset.tese);drawer.draft.teseIds=[...s];return}
